@@ -226,23 +226,25 @@ impl Pinger {
         };
         let now = time::Instant::now();
         let payload = read_payload(&resp_packet.payload(), resp_ip,bsend);
+
         self.total_pings += 1;
         self.rtt_total += now.duration_since(bsend).as_nanos();
         self.avg_rtt_ns = self.rtt_total  / (self.total_pings as u128);
         self.avg_rtt = time::Duration::from_nanos(self.avg_rtt_ns as u64);
+
         match resp_packet.get_icmp_type() {
             IcmpTypes::EchoReply => {
-                if payload.id != self.id {
-                    return Err(Box::new(SimpleError::new("Duh what??")));
-                }
                 self.icmp_seq += 1;
                 return Ok(payload);
             }
             IcmpTypes::DestinationUnreachable => {
                 self.lost_packets += 1;
                 return Err(Box::new(SimpleError::new(
-                    format!("{}: destination Unreachable", self.t_addr).as_str(),
+                    format!("{}: Destination Unreachable", self.t_addr).as_str(),
                 )));
+            }
+            IcmpTypes::EchoRequest => {
+                return Err(Box::new(SimpleError::new("hey dont ping yourself would ya?")));
             }
             _ => {
                 self.lost_packets += 1;
@@ -320,6 +322,9 @@ fn mk_payload(id: u16, icmp_seq: u16) -> Vec<u8> {
 }
 
 fn make_icmp_packet(icmp_buffer: &mut [u8], id: u16, icmp_seq: u16) -> icmp::IcmpPacket {
+    if icmp_buffer.len() < 24{
+        panic!("cmonnnnnnnn make sure its at least 24 bytes!!!!")
+    }
     let mut icmp_packet = icmp::MutableIcmpPacket::new(icmp_buffer).unwrap();
     icmp_packet.populate(&icmp::Icmp {
         icmp_type: icmp::IcmpTypes::EchoRequest,
