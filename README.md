@@ -7,7 +7,6 @@
 
 ```
 use retarded_ping;
-
 use std::{net::IpAddr, str::FromStr, thread, time};
 
 fn main() {
@@ -15,6 +14,7 @@ fn main() {
         IpAddr::from_str("1.1.1.1").unwrap(),
         time::Duration::from_millis(500),
         46,
+        60
     );
     loop {
         match pinger.ping_throw() {
