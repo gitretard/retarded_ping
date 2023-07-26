@@ -1,8 +1,13 @@
 use pnet::{
-    packet::{icmp::*,icmpv6::* ,*},
+    packet::{icmp::*, icmpv6::*, *},
     transport::*,
 };
-use std::{error::Error, fmt, mem, net::{IpAddr,Ipv6Addr}, process, time, vec};
+use std::{
+    error::Error,
+    fmt, mem,
+    net::{IpAddr, Ipv6Addr},
+    process, time, vec,
+};
 
 pub trait PrettyUnwrap<T, E> {
     fn pretty_unwrap(self, msg: Option<&str>) -> T;
@@ -38,7 +43,6 @@ pub struct Pinger {
     total_pings: u128,
     lost_packets: usize,
     rtt_total: u128,
-    avg_rtt_ns: u128,
     avg_rtt: time::Duration,
 
     tx: TransportSender,
@@ -56,28 +60,33 @@ pub struct EchoResponse {
     id: u16,
     icmp_seq: u16,
     s_addr: IpAddr,
-    size: usize,
+    payload_size: usize,
+    packet_size: usize,
 }
 
 impl EchoResponse {
     /// do whatever the fuck u want with it
-    pub fn send_time(&self) -> u128{
+    pub fn send_time(&self) -> u128 {
         self.send_time
     }
-    pub fn rtt(&self) -> time::Duration{
+
+    pub fn rtt(&self) -> time::Duration {
         self.rtt
     }
-    pub fn id(&self) -> u16{
+    pub fn id(&self) -> u16 {
         self.id
     }
-    pub fn icmp_seq(&self) -> u16{
+    pub fn icmp_seq(&self) -> u16 {
         self.icmp_seq
     }
-    pub fn size(&self) -> usize {
-        self.size
-    }
-    pub fn s_addr(&self) -> IpAddr{
+    pub fn s_addr(&self) -> IpAddr {
         self.s_addr
+    }
+    pub fn payload_size(&self) -> usize {
+        self.payload_size
+    }
+    pub fn packet_size(&self) -> usize {
+        self.packet_size
     }
 }
 
@@ -89,7 +98,7 @@ struct SimpleError {
 impl SimpleError {
     fn new(msg: &str) -> SimpleError {
         SimpleError {
-            details: msg.to_string(),
+            details: msg.to_owned(),
         }
     }
 }
@@ -107,7 +116,6 @@ impl Error for SimpleError {
 }
 
 impl Pinger {
-
     /// New pinger struct
 
     pub fn new(addr: IpAddr, timeout: time::Duration, payload_size: usize, ttl: u8) -> Pinger {
@@ -140,7 +148,6 @@ impl Pinger {
             lost_packets: 0,
             rtt_total: 0,
             avg_rtt: time::Duration::new(0, 0),
-            avg_rtt_ns: 0,
             tx: tx,
             rx: rx,
             id: process::id() as u16,
@@ -160,26 +167,25 @@ impl Pinger {
                 self.tx
                     .send_to(packet, self.t_addr)
                     .pretty_unwrap(Some("Failed to tx.send_to"));
-                return self.v4_recv(before_send_time)
+                return self.v4_recv(before_send_time);
             }
             IpAddr::V6(dest) => {
                 let packet = make_icmpv6_packet(dest, &mut buf, self.id, self.icmp_seq);
                 self.tx
                     .send_to(packet, self.t_addr)
                     .pretty_unwrap(Some("Failed to tx.send_to"));
-                return self.v6_recv(before_send_time)
+                return self.v6_recv(before_send_time);
             }
         }
     }
 
-    fn calc_avg_rtt(&mut self,before_send: time::Instant) {
+    fn calc_avg_rtt(&mut self, before_send: time::Instant) {
         let now = time::Instant::now();
         self.rtt_total += now.duration_since(before_send).as_nanos();
-        self.avg_rtt_ns = (self.rtt_total  / (self.total_pings as u128));
-        self.avg_rtt = time::Duration::from_nanos((self.rtt_total  / (self.total_pings)) as u64);
+        self.avg_rtt = time::Duration::from_nanos((self.rtt_total / (self.total_pings)) as u64);
     }
 
-    fn v4_recv(&mut self,before_send: time::Instant) -> Result<EchoResponse, Box<dyn Error>> {
+    fn v4_recv(&mut self, before_send: time::Instant) -> Result<EchoResponse, Box<dyn Error>> {
         let mut tr = icmp_packet_iter(&mut self.rx);
         let (resp_packet, resp_ip) = match tr.next_with_timeout(self.timeout) {
             Ok(t) => match t {
@@ -196,7 +202,12 @@ impl Pinger {
                 )));
             }
         };
-        let payload = read_payload(&resp_packet.payload(), resp_ip,before_send);
+        let payload = echo_parse(
+            &resp_packet.payload(),
+            resp_packet.packet_size(),
+            resp_ip,
+            before_send,
+        );
 
         self.total_pings += 1;
 
@@ -211,7 +222,9 @@ impl Pinger {
                 )));
             }
             IcmpTypes::EchoRequest => {
-                return Err(Box::new(SimpleError::new("hey dont ping yourself would ya?")));
+                return Err(Box::new(SimpleError::new(
+                    "hey dont ping yourself would ya?",
+                )));
             }
             _ => {
                 self.lost_packets += 1;
@@ -230,8 +243,7 @@ impl Pinger {
         Ok(payload)
     }
 
-    fn v6_recv(&mut self,before_send: time::Instant) -> Result<EchoResponse, Box<dyn Error>>{
-
+    fn v6_recv(&mut self, before_send: time::Instant) -> Result<EchoResponse, Box<dyn Error>> {
         let mut tr = icmpv6_packet_iter(&mut self.rx);
         let (resp_packet, resp_ip) = match tr.next_with_timeout(self.timeout) {
             Ok(t) => match t {
@@ -248,7 +260,12 @@ impl Pinger {
                 )));
             }
         };
-        let payload = read_payload(&resp_packet.payload(), resp_ip,before_send);
+        let payload = echo_parse(
+            &resp_packet.payload(),
+            resp_packet.packet_size(),
+            resp_ip,
+            before_send,
+        );
 
         self.total_pings += 1;
 
@@ -263,7 +280,9 @@ impl Pinger {
                 )));
             }
             Icmpv6Types::EchoRequest => {
-                return Err(Box::new(SimpleError::new("hey dont ping yourself would ya?")));
+                return Err(Box::new(SimpleError::new(
+                    "hey dont ping yourself would ya?",
+                )));
             }
             _ => {
                 self.lost_packets += 1;
@@ -290,7 +309,7 @@ impl Pinger {
         self.lost_packets
     }
 
-    pub fn t_addr(&self) -> IpAddr{
+    pub fn t_addr(&self) -> IpAddr {
         self.t_addr
     }
 
@@ -302,12 +321,18 @@ impl Pinger {
         self.id
     }
 
-    pub fn icmp_seq(&self) -> u16{
+    pub fn icmp_seq(&self) -> u16 {
         self.icmp_seq
     }
 }
 
-fn read_payload(payload: &[u8], ip: IpAddr, before_send: time::Instant) -> EchoResponse {
+fn echo_parse(
+    payload: &[u8],
+    packet_size: usize,
+    ip: IpAddr,
+    before_send: time::Instant,
+) -> EchoResponse {
+    // AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAa
     let send_time = unsafe {
         let num = 0u128;
         let mut arr = mem::transmute::<u128, [u8; 16]>(num);
@@ -315,7 +340,6 @@ fn read_payload(payload: &[u8], ip: IpAddr, before_send: time::Instant) -> EchoR
         mem::transmute::<[u8; 16], u128>(arr)
     };
 
-    // AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAa
     let id = payload[0] as u16 + ((payload[1] as u16) << 8); // identifier
     let icmp_seq = payload[2] as u16 + ((payload[3] as u16) << 8);
     let now = time::Instant::now();
@@ -325,14 +349,15 @@ fn read_payload(payload: &[u8], ip: IpAddr, before_send: time::Instant) -> EchoR
         id: id,
         icmp_seq: icmp_seq,
         s_addr: ip,
-        size: payload.len()
+        payload_size: payload.len(),
+        packet_size: packet_size,
     }
 }
 
 fn mk_payload(id: u16, icmp_seq: u16) -> Vec<u8> {
     let now = time::SystemTime::now()
         .duration_since(time::UNIX_EPOCH)
-        .pretty_unwrap(Some("unix epoch err"))
+        .pretty_unwrap(Some("mk_payload systime unix epoch"))
         .as_millis();
     let arr = unsafe { mem::transmute::<u128, [u8; 16]>(now) };
     let mut res = vec![
@@ -346,7 +371,7 @@ fn mk_payload(id: u16, icmp_seq: u16) -> Vec<u8> {
 }
 
 fn make_icmp_packet(icmp_buffer: &mut [u8], id: u16, icmp_seq: u16) -> icmp::IcmpPacket {
-    if icmp_buffer.len() < 24{
+    if icmp_buffer.len() < 24 {
         panic!("cmonnnnnnnn make sure its at least 24 bytes!!!!")
     }
     let mut icmp_packet = icmp::MutableIcmpPacket::new(icmp_buffer).unwrap();
@@ -361,17 +386,26 @@ fn make_icmp_packet(icmp_buffer: &mut [u8], id: u16, icmp_seq: u16) -> icmp::Icm
     icmp_packet.consume_to_immutable()
 }
 
-fn make_icmpv6_packet(dest: Ipv6Addr, icmp_buffer: &mut [u8], id: u16, icmp_seq: u16) -> icmpv6::Icmpv6Packet{
-    if icmp_buffer.len() < 24{
+fn make_icmpv6_packet(
+    dest: Ipv6Addr,
+    icmp_buffer: &mut [u8],
+    id: u16,
+    icmp_seq: u16,
+) -> icmpv6::Icmpv6Packet {
+    if icmp_buffer.len() < 24 {
         panic!("cmonnnnnnnn make sure its at least 24 bytes!!!!")
     }
     let mut icmp_packet = icmpv6::MutableIcmpv6Packet::new(icmp_buffer).unwrap();
-    icmp_packet.populate(&icmpv6::Icmpv6{
+    icmp_packet.populate(&icmpv6::Icmpv6 {
         icmpv6_type: Icmpv6Types::EchoRequest,
         icmpv6_code: Icmpv6Code::new(0),
         checksum: 0,
         payload: mk_payload(id, icmp_seq),
     });
-    icmp_packet.set_checksum(icmpv6::checksum(&icmp_packet.to_immutable(), &Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 0), &dest));
+    icmp_packet.set_checksum(icmpv6::checksum(
+        &icmp_packet.to_immutable(),
+        &Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 0),
+        &dest,
+    ));
     icmp_packet.consume_to_immutable()
 }
