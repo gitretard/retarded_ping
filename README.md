@@ -21,7 +21,7 @@ fn main() {
             Ok(echo) => {
                 println!(
                     "{} bytes from {}; icmp_seq={}, rtt={} ns, avg_rtt={} ns ",
-                    echo.size(),
+                    echo.payload().len(),
                     echo.s_addr(),
                     pinger.icmp_seq(),
                     echo.rtt().as_nanos(),

@@ -60,8 +60,8 @@ pub struct EchoResponse {
     id: u16,
     icmp_seq: u16,
     s_addr: IpAddr,
-    payload_size: usize,
     packet_size: usize,
+    payload: Vec<u8>,
 }
 
 impl EchoResponse {
@@ -82,11 +82,12 @@ impl EchoResponse {
     pub fn s_addr(&self) -> IpAddr {
         self.s_addr
     }
-    pub fn payload_size(&self) -> usize {
-        self.payload_size
-    }
+    /// Note: This function returns the incorrect size if the packet. fuck
     pub fn packet_size(&self) -> usize {
         self.packet_size
+    }
+    pub fn payload(&self) -> Vec<u8>{
+        self.payload.clone()
     }
 }
 
@@ -301,7 +302,7 @@ impl Pinger {
         Ok(payload)
     }
 
-    pub fn set_target(&mut self,target: IpAddr){
+    pub fn set_target(&mut self, target: IpAddr) {
         self.t_addr = target
     }
 
@@ -353,8 +354,8 @@ fn echo_parse(
         id,
         icmp_seq,
         s_addr: ip,
-        payload_size: payload.len(),
-        packet_size,
+        packet_size: packet_size,
+        payload: Vec::from(payload),
     }
 }
 
