@@ -143,16 +143,16 @@ impl Pinger {
         };
         Pinger {
             t_addr: addr,
-            payload_size: payload_size,
+            payload_size,
             total_pings: 0,
             lost_packets: 0,
             rtt_total: 0,
             avg_rtt: time::Duration::new(0, 0),
-            tx: tx,
-            rx: rx,
+            tx,
+            rx,
             id: process::id() as u16,
             icmp_seq: 0,
-            timeout: timeout,
+            timeout,
         }
     }
 
@@ -203,7 +203,7 @@ impl Pinger {
             }
         };
         let payload = echo_parse(
-            &resp_packet.payload(),
+            resp_packet.payload(),
             resp_packet.packet_size(),
             resp_ip,
             before_send,
@@ -261,7 +261,7 @@ impl Pinger {
             }
         };
         let payload = echo_parse(
-            &resp_packet.payload(),
+            resp_packet.payload(),
             resp_packet.packet_size(),
             resp_ip,
             before_send,
@@ -299,6 +299,10 @@ impl Pinger {
         self.calc_avg_rtt(before_send);
 
         Ok(payload)
+    }
+
+    pub fn set_target(&mut self,target: IpAddr){
+        self.t_addr = target
     }
 
     pub fn total_pings(&self) -> u128 {
@@ -344,13 +348,13 @@ fn echo_parse(
     let icmp_seq = payload[2] as u16 + ((payload[3] as u16) << 8);
     let now = time::Instant::now();
     EchoResponse {
-        send_time: send_time,
+        send_time,
         rtt: now.duration_since(before_send),
-        id: id,
-        icmp_seq: icmp_seq,
+        id,
+        icmp_seq,
         s_addr: ip,
         payload_size: payload.len(),
-        packet_size: packet_size,
+        packet_size,
     }
 }
 
