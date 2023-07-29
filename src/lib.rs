@@ -60,7 +60,7 @@ pub struct EchoResponse {
     id: u16,
     icmp_seq: u16,
     s_addr: IpAddr,
-    packet_size: usize,
+    packet_metadata_size: usize,
     payload: Vec<u8>,
 }
 
@@ -82,38 +82,55 @@ impl EchoResponse {
     pub fn s_addr(&self) -> IpAddr {
         self.s_addr
     }
-    /// Note: This function returns the incorrect size if the packet. fuck
-    pub fn packet_size(&self) -> usize {
-        self.packet_size
+    pub fn packet_metdata_size(&self) -> usize {
+        self.packet_metadata_size
     }
-    pub fn payload(&self) -> Vec<u8>{
+    /// Might be wrong. but  i think the packet size is packet_metdata_size (might not even be the real size of metdata) + payload_size
+    pub fn packet_size(&self) -> usize{
+        self.packet_metadata_size + self.payload.len()
+    } 
+    pub fn payload(&self) -> Vec<u8> {
         self.payload.clone()
     }
 }
 
 #[derive(Debug)]
-struct SimpleError {
+pub struct PingError {
     details: String,
+    err: PingEnum,
 }
 
-impl SimpleError {
-    fn new(msg: &str) -> SimpleError {
-        SimpleError {
+impl PingError {
+    fn new(msg: &str, eum: PingEnum) -> PingError {
+        PingError {
             details: msg.to_owned(),
+            err: eum,
         }
+    }
+    pub fn err(&self) -> PingEnum {
+        self.err.clone()
     }
 }
 
-impl fmt::Display for SimpleError {
+impl fmt::Display for PingError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{}", self.details)
     }
 }
 
-impl Error for SimpleError {
+impl Error for PingError {
     fn description(&self) -> &str {
         &self.details
     }
+}
+
+#[derive(Debug, Clone)]
+pub enum PingEnum {
+    Unknown,
+    NoData,
+    InvalidIcmpCode,
+    DestinationUnreachable,
+    SelfPing,
 }
 
 impl Pinger {
@@ -159,7 +176,7 @@ impl Pinger {
 
     /// Pings once to self.t_addr
 
-    pub fn ping_throw(&mut self) -> Result<EchoResponse, Box<dyn Error>> {
+    pub fn ping_throw(&mut self) -> Result<EchoResponse, PingError> {
         let mut buf = vec![0u8; self.payload_size];
         let before_send_time = time::Instant::now();
         match self.t_addr {
@@ -186,21 +203,20 @@ impl Pinger {
         self.avg_rtt = time::Duration::from_nanos((self.rtt_total / (self.total_pings)) as u64);
     }
 
-    fn v4_recv(&mut self, before_send: time::Instant) -> Result<EchoResponse, Box<dyn Error>> {
+    fn v4_recv(&mut self, before_send: time::Instant) -> Result<EchoResponse, PingError> {
         let mut tr = icmp_packet_iter(&mut self.rx);
         let (resp_packet, resp_ip) = match tr.next_with_timeout(self.timeout) {
             Ok(t) => match t {
                 Some(s) => s,
                 None => {
-                    return Err(Box::new(SimpleError::new(
-                        "No data (timeout? who fucking knows. fuck pnet)",
-                    )));
+                    return Err(PingError::new(
+                        "Timeout? who knows. pnet wont fucking tell",
+                        PingEnum::NoData,
+                    ));
                 }
             },
             Err(e) => {
-                return Err(Box::new(SimpleError::new(
-                    format!("tr.next() err: {e}").as_str(),
-                )));
+                return Err(PingError::new(e.to_string().as_str(), PingEnum::Unknown));
             }
         };
         let payload = echo_parse(
@@ -218,24 +234,24 @@ impl Pinger {
             }
             IcmpTypes::DestinationUnreachable => {
                 self.lost_packets += 1;
-                return Err(Box::new(SimpleError::new(
-                    format!("{}: Destination Unreachable", self.t_addr).as_str(),
-                )));
+                // probably wont get used
+                return Err(PingError::new(
+                    "Destination Unreachable",
+                    PingEnum::DestinationUnreachable,
+                ));
             }
             IcmpTypes::EchoRequest => {
-                return Err(Box::new(SimpleError::new(
-                    "hey dont ping yourself would ya?",
-                )));
+                return Err(PingError::new(
+                    "Dont ping yourself would ya?",
+                    PingEnum::SelfPing,
+                ));
             }
             _ => {
                 self.lost_packets += 1;
-                return Err(Box::new(SimpleError::new(
-                    format!(
-                        "Invalid ICMP Echo reply type: {:?}",
-                        resp_packet.get_icmp_type()
-                    )
-                    .as_str(),
-                )));
+                return Err(PingError::new(
+                    format!("Invalid ICMP Echo code: {}", resp_packet.get_icmp_code().0).as_str(),
+                    PingEnum::InvalidIcmpCode,
+                ));
             }
         };
 
@@ -244,21 +260,20 @@ impl Pinger {
         Ok(payload)
     }
 
-    fn v6_recv(&mut self, before_send: time::Instant) -> Result<EchoResponse, Box<dyn Error>> {
+    fn v6_recv(&mut self, before_send: time::Instant) -> Result<EchoResponse, PingError> {
         let mut tr = icmpv6_packet_iter(&mut self.rx);
         let (resp_packet, resp_ip) = match tr.next_with_timeout(self.timeout) {
             Ok(t) => match t {
                 Some(s) => s,
                 None => {
-                    return Err(Box::new(SimpleError::new(
-                        "No data (timeout? who fucking knows. fuck pnet)",
-                    )));
+                    return Err(PingError::new(
+                        "Timeout? who knows. pnet wont fucking tell",
+                        PingEnum::NoData,
+                    ));
                 }
             },
             Err(e) => {
-                return Err(Box::new(SimpleError::new(
-                    format!("tr.next() err: {e}").as_str(),
-                )));
+                return Err(PingError::new(e.to_string().as_str(), PingEnum::Unknown));
             }
         };
         let payload = echo_parse(
@@ -276,24 +291,28 @@ impl Pinger {
             }
             Icmpv6Types::DestinationUnreachable => {
                 self.lost_packets += 1;
-                return Err(Box::new(SimpleError::new(
-                    format!("{}: Destination Unreachable", self.t_addr).as_str(),
-                )));
+                // probably wont get used
+                return Err(PingError::new(
+                    "Destination Unreachable",
+                    PingEnum::DestinationUnreachable,
+                ));
             }
             Icmpv6Types::EchoRequest => {
-                return Err(Box::new(SimpleError::new(
-                    "hey dont ping yourself would ya?",
-                )));
+                return Err(PingError::new(
+                    "Dont ping yourself would ya?",
+                    PingEnum::SelfPing,
+                ));
             }
             _ => {
                 self.lost_packets += 1;
-                return Err(Box::new(SimpleError::new(
+                return Err(PingError::new(
                     format!(
-                        "Invalid ICMP Echo reply type: {:?}",
-                        resp_packet.get_icmpv6_type()
+                        "Invalid ICMP Echo code: {}",
+                        resp_packet.get_icmpv6_code().0
                     )
                     .as_str(),
-                )));
+                    PingEnum::InvalidIcmpCode,
+                ));
             }
         };
 
@@ -354,7 +373,7 @@ fn echo_parse(
         id,
         icmp_seq,
         s_addr: ip,
-        packet_size: packet_size,
+        packet_metadata_size: packet_size,
         payload: Vec::from(payload),
     }
 }
@@ -408,6 +427,7 @@ fn make_icmpv6_packet(
         payload: mk_payload(id, icmp_seq),
     });
     icmp_packet.set_checksum(icmpv6::checksum(
+        
         &icmp_packet.to_immutable(),
         &Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 0),
         &dest,

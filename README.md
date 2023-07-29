@@ -1,16 +1,16 @@
 ## At first I just thought I will use a ping library for my next project. but since i absolutely hate using pre-made libraries. This is what i got!
 
-### Note: Clean up later
+### Note: I might got a few thigns wrong about the packet size
 
 
 ### Usage:
 
 ```
-use retarded_ping;
+mod ping;
 use std::{net::IpAddr, str::FromStr, thread, time};
 
 fn main() {
-    let mut pinger = retarded_ping::Pinger::new(
+    let mut pinger = ping::Pinger::new(
         IpAddr::from_str("1.1.1.1").unwrap(),
         time::Duration::from_millis(500),
         46,
@@ -21,7 +21,7 @@ fn main() {
             Ok(echo) => {
                 println!(
                     "{} bytes from {}; icmp_seq={}, rtt={} ns, avg_rtt={} ns ",
-                    echo.payload().len(),
+                    echo.packet_size(),
                     echo.s_addr(),
                     pinger.icmp_seq(),
                     echo.rtt().as_nanos(),
