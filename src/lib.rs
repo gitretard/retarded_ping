@@ -6,7 +6,7 @@ use std::{
     error::Error,
     fmt, mem,
     net::{IpAddr, Ipv6Addr},
-    process, time, vec,
+    process, time,
 };
 
 pub trait PrettyUnwrap<T, E> {
@@ -42,8 +42,6 @@ pub struct Pinger {
 
     total_pings: u128,
     lost_packets: usize,
-    rtt_total: u128,
-    avg_rtt: time::Duration,
 
     tx: TransportSender,
     rx: TransportReceiver,
@@ -164,8 +162,6 @@ impl Pinger {
             payload_size,
             total_pings: 0,
             lost_packets: 0,
-            rtt_total: 0,
-            avg_rtt: time::Duration::new(0, 0),
             tx,
             rx,
             id: process::id() as u16,
@@ -196,13 +192,6 @@ impl Pinger {
             }
         }
     }
-
-    fn calc_avg_rtt(&mut self, before_send: time::Instant) {
-        let now = time::Instant::now();
-        self.rtt_total += now.duration_since(before_send).as_nanos();
-        self.avg_rtt = time::Duration::from_nanos((self.rtt_total / (self.total_pings)) as u64);
-    }
-
     fn v4_recv(&mut self, before_send: time::Instant) -> Result<EchoResponse, PingError> {
         let mut tr = icmp_packet_iter(&mut self.rx);
         let (resp_packet, resp_ip) = match tr.next_with_timeout(self.timeout) {
@@ -255,7 +244,6 @@ impl Pinger {
             }
         };
 
-        self.calc_avg_rtt(before_send);
 
         Ok(payload)
     }
@@ -316,7 +304,6 @@ impl Pinger {
             }
         };
 
-        self.calc_avg_rtt(before_send);
 
         Ok(payload)
     }
@@ -335,10 +322,6 @@ impl Pinger {
 
     pub fn t_addr(&self) -> IpAddr {
         self.t_addr
-    }
-
-    pub fn avg_rtt(&self) -> time::Duration {
-        self.avg_rtt
     }
 
     pub fn id(&self) -> u16 {
@@ -417,7 +400,7 @@ fn make_icmpv6_packet(
     icmp_seq: u16,
 ) -> icmpv6::Icmpv6Packet {
     if icmp_buffer.len() < 24 {
-        panic!("cmonnnnnnnn make sure its at least 24 bytes!!!!")
+        panic!("ping::<>::cmonnnnnnnn make sure buf at least 24 bytes!!!!")
     }
     let mut icmp_packet = icmpv6::MutableIcmpv6Packet::new(icmp_buffer).unwrap();
     icmp_packet.populate(&icmpv6::Icmpv6 {
